@@ -98,6 +98,8 @@ The following command line options are allowed:
 
 - `-s` Show the current status of adapter
 
+- `-k` disable flow priority control / 关闭流量优先级（默认不关闭）
+
 The different modes are:
 
         wondershaper -a <adapter> -d <rate> -u <rate>

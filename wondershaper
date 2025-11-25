@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 
 #set -ex;
+set +e
 
 # Wonder Shaper
 #
@@ -50,6 +51,7 @@ OPTIONS:
    -d <rate>    Set maximum download rate (in Kbps) and/or
    -u <rate>    Set maximum upload rate (in Kbps)
    -p           Use presets in "$CONF"
+   -k           disable flow priority control
    -f <file>    Use alternative preset file
    -c           Clear the limits from adapter
    -s           Show the current status of adapter
@@ -77,9 +79,10 @@ USPEED="";
 IFACE="";
 IFB="ifb0";
 LOAD_PRESETS=false
+KEEP_PRIO=false          ### SWZ
 MODE=""
 
-while getopts hvf:d:u:a:pcs o; do
+while getopts hvf:d:u:a:pkcs o; do
   case "$o" in
     h)	usage;
       exit 1;;
@@ -89,6 +92,7 @@ while getopts hvf:d:u:a:pcs o; do
     d) DSPEED="$OPTARG";;
     u) USPEED="$OPTARG";;
     a) IFACE="$OPTARG";;
+    k) KEEP_PRIO=true;;     
     p) LOAD_PRESETS=true;;
     c) MODE="clear";;
     s) MODE="status";;
@@ -126,10 +130,14 @@ if [ "$MODE" = "status" ]; then
 fi;
 
 if [ "$MODE" = "clear" ]; then
-    tc qdisc del dev "$IFACE" root    2> /dev/null > /dev/null;
-    tc qdisc del dev "$IFACE" ingress 2> /dev/null > /dev/null;
-    tc qdisc del dev "$IFB"   root    2> /dev/null > /dev/null;
-    tc qdisc del dev "$IFB"   ingress 2> /dev/null > /dev/null;
+    tc qdisc del dev "$IFACE" root    2> /dev/null > /dev/null || true;
+    tc qdisc del dev "$IFACE" ingress 2> /dev/null > /dev/null || true;
+    tc qdisc del dev "$IFB"   root    2> /dev/null > /dev/null || true;
+    tc qdisc del dev "$IFB"   ingress 2> /dev/null > /dev/null || true;
+    iptables -t mangle -D POSTROUTING -o "$IFACE" -m physdev --physdev-is-bridged \
+         -j MARK --set-mark 0x2 2>/dev/null || true
+    ip6tables -t mangle -D POSTROUTING -o "$IFACE" -m physdev --physdev-is-bridged \
+         -j MARK --set-mark 0x2 2>/dev/null || true
     exit;
 fi;
 
@@ -265,5 +273,20 @@ if [[ -n "$DSPEED" ]]; then
 
 fi;
 
+
+if [[ "$KEEP_PRIO" = false ]]; then            ### 流量优先级
+  # 1. 先确保 mangle 表能匹配 bridge 端口
+  modprobe br_netfilter 2>/dev/null || true
+  # 2. 打标记：凡是 *从这块网卡出去* 并且 *源端口是 bridge 端口* 的流量
+  #    标记 0x2，随后让 TC 把 0x2 扔进低优先级 band
+  iptables -t mangle -I POSTROUTING -o "$IFACE" -m physdev --physdev-is-bridged \
+           -j MARK --set-mark 0x2
+  ip6tables -t mangle -I POSTROUTING -o "$IFACE" -m physdev --physdev-is-bridged \
+           -j MARK --set-mark 0x2
+fi         
+
+if [[ "$KEEP_PRIO" = false ]]; then            ### 流量优先级
+  tc filter add dev "$IFACE" parent 1: protocol ip prio 5 handle 2 fw flowid 1:30
+fi           
 ### EOF
 ### vim:tw=80:et:sts=2:st=2:sw=2:com+=b\:###:fo+=cqtrw:tags=tags:
